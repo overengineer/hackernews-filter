@@ -12,16 +12,16 @@ from bs4 import BeautifulSoup
 # to build this kind of thing
 
 
-SCAN_URL = 'https://news.ycombinator.com/'
+SCAN_URL = 'https://news.ycombinator.com/news'
 VERBOTEN_LIST = 'filter.txt'
 
-def get_stories():
+def get_stories(page=1):
     """ Scrapes hackernews stories and filters the collection. """
     story_rows = []
     stories = []
 
     # fetch!
-    r = requests.get(SCAN_URL, verify=True)
+    r = requests.get(SCAN_URL + '?p=' + str(page), verify=True)
     souped_body = BeautifulSoup(r.text, 'lxml')
 
     try:
@@ -77,7 +77,7 @@ def filter_stories(stories):
     compiled_re = re.compile(combined_re)
 
     for story in stories:
-        if compiled_re.match(story['title']) or compiled_re.match(story['link']):
+        if any(compiled_re.match(str(v)) for v in  story.values()):
             result['crap'].append(story)
         else:
             result['good'].append(story)

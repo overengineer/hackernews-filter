@@ -206,3 +206,6 @@
 # not worth reading since the '90s
 # crap articles but /stellar/ interstitial ad enforcement
 .*spectrum.ieee.org.*
+
+
+.*(corona|covid|vaccin|lockdown|antivax|antimask|quarantine|pandemi).*
