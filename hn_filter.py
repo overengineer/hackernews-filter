@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from hn_filter_core import get_stories, filter_stories
 
+from cachier import cachier
+
 n_stories = 20
 avg_cluster_size = 3
 
@@ -61,6 +63,7 @@ def build_similarity_matrix(sentences, stop_words):
 
     return similarity_matrix
 
+@cachier()
 def generate_summary(text, top_n=int(n_stories/avg_cluster_size)):
     stop_words = stopwords.words('english')
 
@@ -78,43 +81,37 @@ def generate_summary(text, top_n=int(n_stories/avg_cluster_size)):
     ranked_sentence = sorted(((scores[i],s) for i,s in enumerate(sentences)), reverse=True,key=lambda e: e[0])
     return ". ".join(' '.join(e[1]) for e in ranked_sentence[:top_n])
 
-def cached_content(url):
-    from requests import get
-    import base64, os.path
-    if not url: return None
-    filename = base64.urlsafe_b64encode(url.encode()).decode('utf-8')
-    if not os.path.exists('cache'):
-        os.mkdir('cache')
-    cache = os.path.join("cache", filename)
-    try:
-        assert os.path.exists(cache)
-        with open(cache,'r') as f:
-            return f.read()
-    except Exception:
-        source = get(url).content.decode('utf-8')
-        if not source: return ''
-        with open(cache, 'w') as f:
-            f.write(source)
-        return source
-
 def get_content(url):
+    from requests import get
+    if not url: return ''
+    return get(url, timeout=60).content.decode('utf-8')
+
+@cachier()
+def extract_content(url):
     from trafilatura import extract
     from lxml import html
-    content = cached_content(url)
-    page = html.fromstring(content)
-    return extract(page, include_comments=False, include_tables=False, no_fallback=True)
+    try:
+        content = get_content(url)
+        page = html.fromstring(content)
+        return content, extract(page, include_comments=False, include_tables=False, no_fallback=True)
+    except:
+        return '', ''
 
 stories = list()
 for story in good_stories:
     print(story['link'])
     try:
-        content = str(get_content(story['link']))
-        assert content
+        raw, content = extract_content(story['link'])
+        density = len(content)/len(raw)
+        story['density'] = density
         story['content'] = content
+        assert content
+        assert density > 0.1
         story['summary'] = generate_summary(story['content'][:1000])
         assert story['summary']
         stories.append(story)
-    except:
+    except Exception as ex:
+        print(ex)
         good_stories.remove(story)
         crap_stories.append(story)
 
@@ -158,34 +155,51 @@ from nltk.corpus import stopwords
 import re
 
 stops = set(stopwords.words('english')) | set([''])
-for story in stories:
-    word_list = [re.sub('[^a-z]|(^.*ing$)','', w.lower()) for w in story['content'].split()]
+pattern = re.compile('[^a-z]|(^.*ing$)')
+
+import json
+def json_hash(*args, **kwargs):
+    return json.dumps([args, kwargs])
+
+@cachier(hash_params=json_hash)
+def extract_keywords(story):
+    word_list = [re.sub(pattern,'', w.lower()) for w in story['content'].split()]
     words = set(word_list) - stops
 
     counts = {}
     for word in words:
         counts[word] = len([w for w in word_list if w == word])
-    story['words'] = counts
+    return counts
 
-fstories = filter_stories(stories)
-good_stories = fstories['good']
-crap_stories += fstories['crap']
+
+for story in stories:
+    story['words'] = extract_keywords(story)
+
+good_stories = stories
+
+# fstories = filter_stories(stories)
+# good_stories = fstories['good']
+# crap_stories += fstories['crap']
 
 for story in good_stories[:n_stories][::]:
-    words = story['words'].keys()
-    keywords = set(words)
-    for s in stories:
-        if s != story:
-            keywords -= set(s['words'].keys())
-    kw = [k for k,v in sorted(story['words'].items(), reverse=True, key=lambda p: p[1])[:8]]
-    print(BOLDON + story['title'] + BOLDOFF)
-    print("  ", kw)
-    text = story['summary'].split()
-    print("\n  ", end='')
-    for i, word in enumerate(text[:50]):
-        print(word, end=' ' if (i+1) % 10 else '\n  ')
-    print("\n  " + story['link'])
-     
+    try:
+        words = story['words'].keys()
+        keywords = set(words)
+        for s in stories:
+            if s != story:
+                keywords -= set(s['words'].keys())
+        kw = [k for k,v in sorted(story['words'].items(), reverse=True, key=lambda p: p[1])[:8]]
+        print(BOLDON + story['title'] + BOLDOFF)
+        print("  ", kw)
+        text = story['summary'].split()
+        print("\n  ", end='')
+        for i, word in enumerate(text[:50]):
+            print(word, end=' ' if (i+1) % 10 else '\n  ')
+        print("\n  " + story['link'])     
+        print("\n  Density: ", story['density'])
+    except:
+        pass
 
-print("Good: " + str(len(good_stories)))
-print("Crap: " + str(len(crap_stories)))
+print("Good: ", len(good_stories), sum(story['density'] for story in good_stories)/len(good_stories))
+densities = [story['density'] for story in crap_stories if 'density' in story.keys()]
+print("Crap: ", len(crap_stories), sum(densities)/len(densities))
